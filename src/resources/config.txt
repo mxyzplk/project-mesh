@@ -12,25 +12,6 @@ component:
     data_dir: press_wing
 files:
    - dpress_1.txt
-   - dpress_2.txt
-   - dpress_3.txt
-   - dpress_4.txt
-   - dpress_5.txt
-   - dpress_6.txt
-   - dpress_7.txt
-   - dpress_8.txt
-   - dpress_9.txt
-   - dpress_10.txt
-   - dpress_11.txt
-   - dpress_12.txt
-   - dpress_13.txt
-   - dpress_14.txt
-   - dpress_15.txt
-   - dpress_16.txt
-   - dpress_17.txt
-   - dpress_18.txt
-   - dpress_19.txt
-   - dpress_20.txt
-   - dpress_21.txt
+
 
 

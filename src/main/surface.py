@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import numpy as np
-from scipy.spatial import ConvexHull
+from scipy.spatial.qhull import Delaunay
 
 
 class Surface:
@@ -48,7 +48,7 @@ class Surface:
             self.nelements = int(temp[0])                  # Number of elements
             self.elements = np.empty((self.nelements, self.mesh_type))
             self.centers = np.empty((self.nelements, 3))
-            self.area = np.empty((self.nelements, 3))
+            self.area = np.empty((self.nelements, 4))
 
             for i in range(self.nelements):
                 line = file.readline()
@@ -69,35 +69,64 @@ class Surface:
                 for i in range(self.ngrids):
                         line = file.readline()
                         temp = line.split()
-                        self.press[i] = float(temp[0])
+                        self.press[i] = float(temp[1])
                         
             elif (int(ptype) == 1):  # press on element centers
                 self.press = np.empty(self.nelements)
                 for i in range(self.nelements):
                         line = file.readline()
                         temp = line.split()
-                        self.press[i] = float(temp[0])
+                        self.press[i] = float(temp[1])
      
 
     def is_point_inside_panel(self, panel_grids, center, plane):
-        if (int(plane) == 0):  # plane xy
-            g1 = 0
-            g2 = 1
-        elif (int(plane) == 1):  # plane xz
-            g1 = 0
+        g1, g2 = 0, 1  # Default values for plane xy
+
+        if int(plane) == 1:  # Adjust values for plane xz
             g2 = 2
             
 
-        grid1 = np.array([panel_grids[0, g1], panel_grids[0, g2]])
-        grid2 = np.array([panel_grids[1, g1], panel_grids[1, g2]])
-        grid3 = np.array([panel_grids[2, g1], panel_grids[2, g2]])
-        grid4 = np.array([panel_grids[3, g1], panel_grids[3, g2]])
-        igrid = np.array([center[g1], center[g2]])
+        grids = panel_grids[:, [g1, g2]]
+
+        point_to_check = center[[g1, g2]]
         
-        all_grids = np.vstack([igrid, grid1, grid2, grid3, grid4])
-        hull = ConvexHull(all_grids)
-        return all(hull.equations.dot(np.hstack([1, igrid])) <= 0)
+        triangulation = Delaunay(grids)
+        simplex_index = triangulation.find_simplex(point_to_check, tol=1e-10)
         
+        is_inside = simplex_index != -1
+       
+        return is_inside
+
+
+    def mapgrids(self, points, npi, plane):
+        
+        self.mapg = np.zeros((npi))
+        check_points = np.zeros(npi, dtype=bool)
+        ch = 0
+        self.mapg[:] = -1
+        
+        for i in range(self.nelements):  # For each cell in target mesh
+            panel_grids = self.grids[self.elements[i, :].astype(int) - 1, :]   # grid array        
+
+            for j in range(npi): # Evaluate each point with pressure from the input mesh
+                            
+                if not check_points[j]:
+                    check = self.is_point_inside_panel(panel_grids, points[j, :], plane)
+                    
+                if (check == True and check_points[j] == False):
+                    check_points[j] = True
+                    self.mapg[j] = i     
+                    ch += 1
+                    print(str(ch) + "/" + str(npi))
+                    
+        filepath = os.path.join(self.results_dir, "map-log.txt")
+        
+        with open(filepath, 'w') as file:
+            file.write("Missing grids\n")
+            for j in range(npi):
+                if (self.mapg[j] == -1):
+                    file.write("{:8d} {:12.6f} {:12.6f} {:12.6f}\n".format(j, points[j, 0], points[j, 1], points[j, 2]))
+                      
 
     def projectmesh(self, points, areas, pressures, plane):
         
@@ -105,39 +134,62 @@ class Surface:
         # pressures: pressures from original mesh
         # areas: panel areas from original mesh
         
-        self.pcenter = np.empty(self.nelements)
-        self.cforce = np.empty((self.nelements, 3))
+        self.pcenter = np.zeros(self.nelements)
+        self.cforce = np.zeros((self.nelements, 3))
         
         npi = len(pressures)
         
         for i in range(self.nelements):  # For each cell in target mesh
-            panel_grids = self.grids[self.elements[i, :].astype(int), :]   # grid array
+            
+            forces = np.zeros(3)
+            
             for j in range(npi): # Evaluate each point with pressure from the input mesh
-                check = self.is_point_inside_panel(panel_grids, points[j, :], plane)
-                if (check == True):
-                    self.pcenter[i] = self.pcenter[i] + pressures[j]
-                    fx = pressures[j] * areas[j, 0]
-                    fy = pressures[j] * areas[j, 1]
-                    fz = pressures[j] * areas[j, 2]
-                    self.cforce[j, 0] = self.cforce[j, 0] + fx
-                    self.cforce[j, 1] = self.cforce[j, 1] + fy
-                    self.cforce[j, 2] = self.cforce[j, 2] + fz
+                if (self.mapg[j] == i):
+                    self.pcenter[i] += pressures[j]
+                    forces[:] += pressures[j] * areas[j, 0:3]
+            
+            self.cforce[i, :] = forces[:]
+            
 
+ 
 
     def write_projected_mesh(self, fout):
         
         filepath = os.path.join(self.results_dir, fout)
         
+        fout2 = fout.replace(".txt", "_output_int.txt")
+        
         with open(filepath, 'w') as file:
             for i in range(self.nelements):
-                file.write("{:12.6f} {:12.6f} {:12.6f} {:12.6f} {:12.6f} {:12.6f}\n".format(self.centers[i, 0], \
-                                                                                            self.centers[i, 0], \
-                                                                                            self.centers[i, 0], \
-                                                                                            self.cforces[i, 0], \
-                                                                                            self.cforces[i, 1], \
-                                                                                            self.cforces[i, 2]))
-           
-         
+                file.write("{:12.6f} {:12.6f} {:12.6f} {:.6e} {:.6e} {:.6e} {:.7e} {:.7e} {:.7e} {:.7e}\n".format(self.centers[i, 0], \
+                                                                                                                       self.centers[i, 0], \
+                                                                                                                       self.centers[i, 0], \
+                                                                                                                       self.cforce[i, 0], \
+                                                                                                                       self.cforce[i, 1], \
+                                                                                                                       self.cforce[i, 2], \
+                                                                                                                       self.area[i, 0], \
+                                                                                                                       self.area[i, 1], \
+                                                                                                                       self.area[i, 2], \
+                                                                                                                       self.area[i, 3]))                 
+        
+        self.intmesh2(fout2)
+    
+  
+     
+    def pressure_on_elements_centers(self):
+        
+        self.pressures_on_centers = np.empty(self.nelements)
+        
+        for i in range(self.nelements):
+            if (self.mesh_type == 3):
+                self.pressures_on_centers[i] = (self.grids[int(self.press[i, 0]) - 1] + self.grids[int(self.press[i, 1]) - 1] + self.grids[int(self.press[i, 2]) - 1]) / 3
+            elif (self.mesh_type == 4):
+                self.pressures_on_centers[i] = 0.25 * (self.grids[int(self.press[i, 0]) - 1] + self.grids[int(self.press[i, 1]) - 1] + self.grids[int(self.press[i, 2]) - 1] + self.grids[int(self.press[i, 3]) - 1])
+        
+        
+    def allocate_press(self, npt):
+        self.press = np.zeros(npt)
+
 
     def calc_panel_centers(self):
         
@@ -151,8 +203,7 @@ class Surface:
                 self.centers[i, 1] = 0.25 * (self.grids[int(self.elements[i, 0]) - 1, 1] + self.grids[int(self.elements[i, 1]) - 1, 1] + self.grids[int(self.elements[i, 2]) - 1, 1] + self.grids[int(self.elements[i, 3]) - 1, 1])
                 self.centers[i, 2] = 0.25 * (self.grids[int(self.elements[i, 0]) - 1, 2] + self.grids[int(self.elements[i, 1]) - 1, 2] + self.grids[int(self.elements[i, 2]) - 1, 2] + self.grids[int(self.elements[i, 3]) - 1, 2])
     
-
-
+        
     
     def calc_area(self):
          
@@ -163,8 +214,8 @@ class Surface:
             elif (self.mesh_type == 4):
                 points = tuple(self.grids[[int(self.elements[i, 0]) - 1, int(self.elements[i, 1]) - 1, int(self.elements[i, 2]) - 1, int(self.elements[i, 3]) - 1], 0:3])
                 self.area[i, 0:3] = self.calculate_quadrilateral_area_3d(points)
+            self.area[i, 3] = (self.area[i, 0] ** 2 + self.area[i, 1] ** 2 + self.area[i, 2] ** 2) ** 0.5
                 
-        print("Areas: {:12.6f} {:12.6f} {:12.6f}".format(np.sum(self.area[:, 0]), np.sum(self.area[:, 1]), np.sum(self.area[:, 2])))
                 
                 
                 
@@ -280,25 +331,21 @@ class Surface:
             for i in range(self.nelements):
                 file.write("{:12.6f} \n".format(self.press[i]))
                 
-
-    def allocate_press(self, n):
-        self.press = np.empty(int(n))
-
-
+                
 
     def intmesh(self, fout):
         
         filepath = os.path.join(self.results_dir, fout)
-        self.forces = np.empty((self.nelements, 3))
-        self.moments = np.empty((self.nelements, 3))
-        self.distance = np.empty((self.nelements, 3))
-        self.refpoint = np.empty(3)
-        self.refcs = np.empty((4, 3))
-        self.refcsvec = np.empty((3, 3))
-        self.rotated_forces = np.empty((self.nelements, 3))
-        self.rotated_moments = np.empty((self.nelements, 3))
-        self.integrated_forces = np.empty(3)
-        self.integrated_moments = np.empty(3)
+        self.forces = np.zeros((self.nelements, 3))
+        self.moments = np.zeros((self.nelements, 3))
+        self.distance = np.zeros((self.nelements, 3))
+        self.refpoint = np.zeros(3)
+        self.refcs = np.zeros((4, 3))
+        self.refcsvec = np.zeros((3, 3))
+        self.rotated_forces = np.zeros((self.nelements, 3))
+        self.rotated_moments = np.zeros((self.nelements, 3))
+        self.integrated_forces = np.zeros(3)
+        self.integrated_moments = np.zeros(3)
         
         cspath = os.path.join(self.resources_dir, "cs.txt")
 
@@ -353,6 +400,105 @@ class Surface:
             self.forces[i, 0] = self.press[i] * self.area[i, 0] # Fx
             self.forces[i, 1] = self.press[i] * self.area[i, 1] # Fy
             self.forces[i, 2] = self.press[i] * self.area[i, 2] # Fz
+            for j in range(3):
+                self.distance[i, j] = self.centers[i, j] - self.refpoint[j]
+            
+            #a = np.cross(self.forces[i, 0:3], self.distance)
+            #print(a)
+            self.moments[i, 0:3] = np.cross(self.forces[i, 0:3], self.distance[i, 0:3])  # Mx, My, Mz
+            
+            #b = np.dot(self.refcsvec, self.forces)
+            #print(b)
+            self.rotated_forces[i, 0:3] = np.dot(self.refcsvec, self.forces[i, 0:3])
+            self.rotated_moments[i, 0:3] = np.dot(self.refcsvec, self.moments[i, 0:3])
+        
+
+        self.integrated_forces[0] = np.sum(self.rotated_forces[:, 0]) / self.aref
+        self.integrated_forces[1] = np.sum(self.rotated_forces[:, 1]) / self.aref
+        self.integrated_forces[2] = np.sum(self.rotated_forces[:, 2]) / self.aref
+        
+        self.integrated_moments[0] = np.sum(self.rotated_forces[:, 0]) / (self.aref * self.bref)
+        self.integrated_moments[1] = np.sum(self.rotated_forces[:, 1]) / (self.aref * self.cref)
+        self.integrated_moments[2] = np.sum(self.rotated_forces[:, 2]) / (self.aref * self.bref)
+        
+        
+        with open(filepath, 'w') as f2:    
+            f2.write("{:12.6f} {:12.6f} {:12.6f} {:12.6f} {:12.6f} {:12.6f}\n".format(self.integrated_forces[0], \
+                                                                                      self.integrated_forces[1], \
+                                                                                      self.integrated_forces[2], \
+                                                                                      self.integrated_moments[0], \
+                                                                                      self.integrated_moments[1], \
+                                                                                      self.integrated_moments[2]))
+            
+            
+            
+    def intmesh2(self, fout):
+        
+        filepath = os.path.join(self.results_dir, fout)
+        self.forces = np.zeros((self.nelements, 3))
+        self.moments = np.zeros((self.nelements, 3))
+        self.distance = np.zeros((self.nelements, 3))
+        self.refpoint = np.zeros(3)
+        self.refcs = np.zeros((4, 3))
+        self.refcsvec = np.zeros((3, 3))
+        self.rotated_forces = np.zeros((self.nelements, 3))
+        self.rotated_moments = np.zeros((self.nelements, 3))
+        self.integrated_forces = np.zeros(3)
+        self.integrated_moments = np.zeros(3)
+        
+        cspath = os.path.join(self.resources_dir, "cs.txt")
+
+        with open(cspath, 'r') as f1:
+            #
+            line = f1.readline()
+            #
+            line = f1.readline()
+            temp = line.split()
+            self.refpoint[0:3] = list(map(float, temp[0:3]))
+            #
+            line = f1.readline()            
+            #
+            line = f1.readline()
+            temp = line.split()
+            self.refcs[0, 0:3] = list(map(float, temp[0:3]))
+            #
+            line = f1.readline()
+            temp = line.split()
+            self.refcs[1, 0:3] = list(map(float, temp[0:3]))
+            #
+            line = f1.readline()
+            temp = line.split()
+            self.refcs[2, 0:3] = list(map(float, temp[0:3]))
+            #
+            line = f1.readline()
+            temp = line.split()
+            self.refcs[3, 0:3] = list(map(float, temp[0:3]))
+            #
+            line = f1.readline()
+            #
+            line = f1.readline()
+            temp = line.split()            
+            self.aref = float(temp[0])
+            #
+            line = f1.readline()
+            temp = line.split()            
+            self.cref = float(temp[0])
+            #
+            line = f1.readline()
+            temp = line.split()            
+            self.bref = float(temp[0])            
+                                                
+            
+        for i in range(3):
+            self.refcsvec[0, i] = self.refcs[1, i] - self.refpoint[i]    # Coordinate System Vectors
+            self.refcsvec[1, i] = self.refcs[2, i] - self.refpoint[i]
+            self.refcsvec[2, i] = self.refcs[3, i] - self.refpoint[i]
+
+
+        for i in range(self.nelements):
+            self.forces[i, 0] = self.cforce[i, 0] # Fx
+            self.forces[i, 1] = self.cforce[i, 1] # Fy
+            self.forces[i, 2] = self.cforce[i, 2] # Fz
             for j in range(3):
                 self.distance[i, j] = self.centers[i, j] - self.refpoint[j]
             

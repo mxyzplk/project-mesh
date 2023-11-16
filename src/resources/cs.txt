@@ -1,0 +1,11 @@
+Reference Point
+0.000    0.000     0.000
+Reference Coordinate System
+0.000    0.000     0.000
+1.000    0.000     0.000
+0.000    1.000     0.000
+0.000    0.000     1.000  
+Reference Geometries
+40.2         Aref
+2.028        Cref
+10.25        Bref
