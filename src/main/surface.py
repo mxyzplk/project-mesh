@@ -162,8 +162,8 @@ class Surface:
         with open(filepath, 'w') as file:
             for i in range(self.nelements):
                 file.write("{:12.6f} {:12.6f} {:12.6f} {:.6e} {:.6e} {:.6e} {:.7e} {:.7e} {:.7e} {:.7e}\n".format(self.centers[i, 0], \
-                                                                                                                       self.centers[i, 0], \
-                                                                                                                       self.centers[i, 0], \
+                                                                                                                       self.centers[i, 1], \
+                                                                                                                       self.centers[i, 2], \
                                                                                                                        self.cforce[i, 0], \
                                                                                                                        self.cforce[i, 1], \
                                                                                                                        self.cforce[i, 2], \
